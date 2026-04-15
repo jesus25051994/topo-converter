@@ -2,91 +2,107 @@ import streamlit as st
 import pandas as pd
 import ezdxf
 import io
+import math
 from supabase import create_client, Client
 
-# --- 1. CONFIGURACIÓN Y CONEXIÓN ---
+# --- 1. CONFIGURACIÓN ---
 st.set_page_config(page_title="TopoConverter Pro", page_icon="🏗️")
-
-# Acceder a las llaves (deben estar en la configuración de Streamlit Cloud)
-# NO pongas las URL/Keys reales aquí, pon los NOMBRES de las variables
 url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(url, key)
 
-# --- 2. LÓGICA DE NEGOCIO Y CONVERSIÓN ---
+# --- 2. FUNCIONES TÉCNICAS ---
+
+def calcular_rumbo(x1, y1, x2, y2):
+    dx = x2 - x1
+    dy = y2 - y1
+    distancia = math.sqrt(dx**2 + dy**2)
+    return distancia
 
 def registrar_uso(puntos, nombre):
     try:
-        data = {
+        supabase.table("registros_uso").insert({
             "puntos_procesados": puntos,
             "nombre_archivo": nombre,
-            "formato_archivo": nombre.split('.')[-1]
-        }
-        supabase.table("registros_uso").insert(data).execute()
-    except Exception as e:
-        st.error(f"Error al registrar en base de datos: {e}")
+            "formato_archivo": "CSV_MICRO"
+        }).execute()
+    except: pass
 
-def generar_dxf(df):
+def generar_dxf_pro(df):
     doc = ezdxf.new('R2010')
     msp = doc.modelspace()
     
-    # Se crean capas para que el topógrafo pueda prender/apagar en AutoCAD
-    doc.layers.new('PUNTOS_TOPOGRAFICOS', dxfattribs={'color': 2}) # Amarillo
-    doc.layers.new('TEXTO_PUNTOS', dxfattribs={'color': 7})       # Blanco/Negro
-    
-    for _, row in df.iterrows():
+    # Definición de capas por descripción
+    capas = {
+        'LP': 1,   # Rojo para Perímetro
+        'PTA': 4,  # Cian para puntos de terreno
+        'STN': 3,  # Verde para estaciones
+        'DEFAULT': 7 # Blanco
+    }
+
+    puntos_cuadro = []
+
+    for i, row in df.iterrows():
         try:
-            # Asegúrate de que las columnas en el Excel se llamen exactamente Punto, X, Y, Z
-            x, y, z = float(row['X']), float(row['Y']), float(row['Z'])
-            punto_nombre = str(row['Punto'])
-            desc = str(row.get('Descripcion', ''))
-
-            # Dibujar Punto
-            msp.add_point((x, y, z), dxfattribs={'layer': 'PUNTOS_TOPOGRAFICOS'})
+            p, y, x, z = row['Punto'], float(row['Y']), float(row['X']), float(row['Z'])
+            desc = str(row['Desc']).upper()
             
-            # Dibujar Texto
-            msp.add_text(f"{punto_nombre} {desc}", 
-                         dxfattribs={'height': 0.2, 'layer': 'TEXTO_PUNTOS'}
-                        ).set_pos((x + 0.1, y + 0.1, z))
-        except Exception:
-            continue
-            
-    out = io.StringIO()
-    doc.write(out)
-    return out.getvalue()
+            # Determinar capa según descripción
+            layer_name = f"TOPO_{desc}"
+            if layer_name not in doc.layers:
+                color = capas.get(desc, capas['DEFAULT'])
+                doc.layers.new(layer_name, dxfattribs={'color': color})
 
-# --- 3. INTERFAZ DE USUARIO ---
-st.title("🏗️ Convertidor: Excel a AutoCAD (DXF)")
-st.write("Herramienta profesional para topografía.")
+            # Dibujar Punto y Texto
+            msp.add_point((x, y, z), dxfattribs={'layer': layer_name})
+            msp.add_text(f"{int(p)}", dxfattribs={'height': 0.25, 'layer': layer_name}).set_pos((x+0.1, y+0.1, z))
 
-archivo = st.file_uploader("Sube tu planilla (Excel o CSV)", type=['xlsx', 'csv'])
+            # Guardar datos para el cuadro si es LP (Límite de Propiedad)
+            if 'LP' in desc:
+                puntos_cuadro.append({'p': int(p), 'x': x, 'y': y})
+
+        except: continue
+
+    return doc, puntos_cuadro
+
+# --- 3. INTERFAZ ---
+st.title("🏗️ TopoConverter Pro: MicroSurvey Edition")
+st.info("Formato detectado: Punto, Norte, Este, Elevación, Descripción")
+
+archivo = st.file_uploader("Sube el TXT/CSV de MicroSurvey", type=['txt', 'csv'])
 
 if archivo:
-    # Leer datos
-    if archivo.name.endswith('xlsx'):
-        df = pd.read_excel(archivo)
-    else:
-        df = pd.read_csv(archivo)
-    
-    st.write("Vista previa de los datos detectados:")
+    # Leer el archivo con el formato P,N,E,Z,D que nos pasó
+    df = pd.read_csv(archivo, names=['Punto', 'Y', 'X', 'Z', 'Desc'])
     st.dataframe(df.head())
 
-    if st.button("🚀 Generar y Registrar"):
-        if 'X' in df.columns and 'Y' in df.columns:
-            # Generar el archivo
-            dxf_string = generar_dxf(df)
-            
-            # Registrar en Supabase
-            registrar_uso(len(df), archivo.name)
-            
-            st.success(f"¡Listo! {len(df)} puntos procesados.")
-            
-            # Botón de descarga
-            st.download_button(
-                label="⬇️ Descargar archivo DXF",
-                data=dxf_string,
-                file_name=f"LEV_{archivo.name.split('.')[0]}.dxf",
-                mime="application/dxf"
-            )
-        else:
-            st.error("Error: El archivo debe tener columnas llamadas 'X' y 'Y'.")
+    if st.button("🚀 Generar DXF + Cuadro de Construcción"):
+        doc, puntos_cuadro = generar_dxf_pro(df)
+        
+        # Lógica del Cuadro de Construcción
+        if len(puntos_cuadro) > 1:
+            st.subheader("📊 Cuadro de Construcción (Vista Previa)")
+            tabla_datos = []
+            for i in range(len(puntos_cuadro) - 1):
+                p1 = puntos_cuadro[i]
+                p2 = puntos_cuadro[i+1]
+                dist = calcular_rumbo(p1['x'], p1['y'], p2['x'], p2['y'])
+                tabla_datos.append({
+                    "De": p1['p'], "A": p2['p'], 
+                    "Distancia (m)": round(dist, 3),
+                    "Coord X": round(p1['x'], 3), "Coord Y": round(p1['y'], 3)
+                })
+            st.table(tabla_datos)
+        
+        # Preparar descarga
+        out = io.StringIO()
+        doc.write(out)
+        
+        registrar_uso(len(df), archivo.name)
+        
+        st.download_button(
+            label="⬇️ Descargar DXF con Capas Inteligentes",
+            data=out.getvalue(),
+            file_name="levantamiento_organizado.dxf",
+            mime="application/dxf"
+        )
