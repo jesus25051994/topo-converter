@@ -28,22 +28,27 @@ def generar_archivo_topo(df):
     
     for _, row in df.iterrows():
         try:
-            # Convertimos a string y limpiamos para evitar errores de tipo
             p_id = str(row[0]).strip()
             y = float(row[1])
             x = float(row[2])
             z = float(row[3])
-            desc = str(row[4]).upper().strip() if len(row) > 4 else "S/D"
+            
+            # LIMPIEZA TOTAL: Convertimos a string, quitamos espacios y caracteres raros
+            # desc_bruta es lo que viene del archivo
+            desc_bruta = str(row[4]).upper()
+            # Quitamos espacios y saltos de linea invisibles que arruinan el "if"
+            desc_limpia = "".join(desc_bruta.split()) 
 
-            layer_name = f"TOPO_{desc}"
+            layer_name = f"TOPO_{desc_limpia}"
             if layer_name not in doc.layers:
-                color = config_capas.get(desc, config_capas['DEFAULT'])
+                color = config_capas.get(desc_limpia, config_capas['DEFAULT'])
                 doc.layers.new(layer_name, dxfattribs={'color': color})
 
             msp.add_point((x, y, z), dxfattribs={'layer': layer_name})
             msp.add_text(p_id, dxfattribs={'height': 0.25, 'layer': layer_name}).set_pos((x + 0.1, y + 0.1, z))
 
-            if "LP" in desc:
+            # LA CLAVE: Buscamos "LP" dentro de la cadena limpia
+            if "LP" in desc_limpia:
                 puntos_cuadro.append({'p': p_id, 'x': x, 'y': y})
         except:
             continue
@@ -57,8 +62,7 @@ archivo = st.file_uploader("Sube tu archivo .txt o .csv", type=['txt', 'csv'])
 
 if archivo:
     try:
-        # LEER CON PANDAS DE FORMA ULTRA FLEXIBLE
-        # sep=None con engine='python' detecta automáticamente si es coma, punto y coma o espacio
+        # Detecta automático el separador y limpia espacios iniciales
         df = pd.read_csv(archivo, sep=None, engine='python', header=None, skipinitialspace=True)
         
         if not df.empty:
@@ -86,6 +90,9 @@ if archivo:
                             "Este (X)": f"{p1['x']:.3f}", "Norte (Y)": f"{p1['y']:.3f}"
                         })
                     st.table(tabla)
+                else:
+                    # Esto te dirá qué está fallando si la tabla no sale
+                    st.warning("No se encontraron suficientes puntos con la etiqueta 'LP'.")
                 
                 # Descarga DXF
                 buffer = io.StringIO()
