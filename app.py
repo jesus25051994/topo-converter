@@ -82,4 +82,4 @@ if archivo:
                 st.download_button("⬇️ Descargar DXF", buffer.getvalue(), "topo.dxf")
                 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error crítico al leer el archivo: {e}")
