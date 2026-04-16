@@ -12,7 +12,7 @@ try:
     key = st.secrets["SUPABASE_KEY"]
     supabase: Client = create_client(url, key)
 except:
-    st.error("Error en Secrets.")
+    st.error("Error en Secrets de Supabase.")
 
 def calcular_distancia(x1, y1, x2, y2):
     return math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
@@ -24,7 +24,6 @@ def generar_archivo_topo(df):
     
     puntos_cuadro = []
     
-    # Procesamiento de puntos y capas
     for i, row in df.iterrows():
         try:
             p_id = str(row[0]).strip()
@@ -43,7 +42,6 @@ def generar_archivo_topo(df):
             msp.add_point((x, y, z), dxfattribs={'layer': layer_name})
             msp.add_text(p_id, dxfattribs={'height': 0.25, 'layer': layer_name}).set_pos((x + 0.1, y + 0.1, z))
 
-            # Si el punto es LP, lo guardamos para el cuadro
             if "LP" in desc_limpia:
                 puntos_cuadro.append({'p': p_id, 'x': x, 'y': y})
         except:
@@ -57,41 +55,39 @@ archivo = st.file_uploader("Sube tu archivo", type=['txt', 'csv'])
 
 if archivo:
     try:
-        # Lectura automática con detección de separador
         df = pd.read_csv(archivo, sep=None, engine='python', header=None, skipinitialspace=True)
         
         if not df.empty:
             st.write("✅ Archivo cargado correctamente.")
             
-            if st.button("🚀 GENERAR DXF + CUADRO"):
-                # PASO 1: Generar el archivo DXF y recolectar puntos LP
+            if st.button("🚀 PROCESAR Y GENERAR"):
+                # 1. Procesar datos
                 doc, lista_lp = generar_archivo_topo(df)
                 
-                # PASO 2: Generar y mostrar el Cuadro de Construcción
+                # 2. GENERAR LA TABLA (El cuadro de antes)
                 if len(lista_lp) > 1:
                     st.success(f"📊 ¡Cuadro generado con {len(lista_lp)} puntos LP!")
                     
                     tabla_datos = []
-                    # Recorremos los puntos para calcular distancias entre ellos
                     for i in range(len(lista_lp) - 1):
                         p1 = lista_lp[i]
                         p2 = lista_lp[i+1]
                         dist = calcular_distancia(p1['x'], p1['y'], p2['x'], p2['y'])
                         
                         tabla_datos.append({
-                            "De (Punto)": p1['p'], 
-                            "A (Punto)": p2['p'], 
-                            "Distancia (m)": f"{dist:.3f}", 
+                            "De": p1['p'], 
+                            "A": p2['p'], 
+                            "Distancia": f"{dist:.3f} m", 
                             "Este (X)": f"{p1['x']:.3f}", 
                             "Norte (Y)": f"{p1['y']:.3f}"
                         })
                     
-                    # Pintamos la tabla visual en la web
+                    # AQUÍ ES DONDE SE PINTA EL CUADRO
                     st.table(tabla_datos)
                 else:
-                    st.warning(f"⚠️ Se detectaron {len(lista_lp)} puntos LP. Se necesitan al menos 2 para generar la tabla.")
-                
-                # PASO 3: Configurar el botón de descarga del DXF
+                    st.warning(f"⚠️ Se detectaron {len(lista_lp)} puntos LP. Revisa las etiquetas en tu archivo.")
+
+                # 3. Descarga y Registro
                 buffer = io.StringIO()
                 doc.write(buffer)
                 
@@ -102,8 +98,12 @@ if archivo:
                     mime="application/dxf"
                 )
                 
-                # Festejo final
+                # 4. Los globos que te gustan
                 st.balloons()
+                
+                try:
+                    supabase.table("registros_uso").insert({"puntos_procesados": len(df), "nombre_archivo": archivo.name}).execute()
+                except: pass
                 
     except Exception as e:
         st.error(f"Error crítico: {e}")
