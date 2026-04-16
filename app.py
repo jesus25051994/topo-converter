@@ -5,105 +5,129 @@ import io
 import math
 from supabase import create_client, Client
 
-st.set_page_config(page_title="TopoConverter Pro", page_icon="🏗️", layout="wide")
+# --- 1. CONFIGURACIÓN ---
+st.set_page_config(page_title="TopoConverter Pro", page_icon="🏗️")
 
+# Es recomendable usar try-except aquí por si los secrets no están configurados
 try:
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_KEY"]
     supabase: Client = create_client(url, key)
-except:
-    st.error("Error en Secrets de Supabase.")
+except Exception as e:
+    st.error("Error de conexión con Supabase. Revisa tus Secrets.")
 
-def calcular_distancia(x1, y1, x2, y2):
-    return math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+# --- 2. FUNCIONES TÉCNICAS ---
 
-def generar_archivo_topo(df):
+def calcular_rumbo(x1, y1, x2, y2):
+    dx = x2 - x1
+    dy = y2 - y1
+    distancia = math.sqrt(dx**2 + dy**2)
+    return distancia
+
+def registrar_uso(puntos, nombre):
+    try:
+        supabase.table("registros_uso").insert({
+            "puntos_processed": puntos,
+            "nombre_archivo": nombre,
+            "formato_archivo": "CSV_MICRO"
+        }).execute()
+    except: 
+        pass
+
+def generar_dxf_pro(df):
     doc = ezdxf.new('R2010')
     msp = doc.modelspace()
-    config_capas = {'LP': 1, 'PTA': 4, 'STN': 3, 'AUX': 2, 'DEFAULT': 7}
     
+    # Definición de colores base
+    colores_capas = {
+        'LP': 1,   # Rojo
+        'PTA': 4,  # Cian
+        'STN': 3,  # Verde
+        'DEFAULT': 7 
+    }
+
     puntos_cuadro = []
-    
+
     for i, row in df.iterrows():
         try:
-            p_id = str(row[0]).strip()
-            y = float(row[1])
-            x = float(row[2])
-            z = float(row[3])
+            # Asignación correcta de columnas según tu pd.read_csv
+            p_id = str(row['Punto']).strip()
+            y = float(row['Y'])
+            x = float(row['X'])
+            z = float(row['Z'])
+            desc_bruta = str(row['Desc']).upper().strip()
             
-            desc_bruta = str(row[4]).upper()
-            desc_limpia = "".join(desc_bruta.split()) 
-
+            # Limpiar nombre para la capa
+            desc_limpia = "".join(desc_bruta.split())
             layer_name = f"TOPO_{desc_limpia}"
+            
+            # Crear capa si no existe
             if layer_name not in doc.layers:
-                color = config_capas.get(desc_limpia, config_capas['DEFAULT'])
+                # Buscamos si la descripción bruta contiene alguna clave (ej: 'LP')
+                color = colores_capas['DEFAULT']
+                for clave, cod_color in colores_capas.items():
+                    if clave in desc_bruta:
+                        color = cod_color
+                        break
                 doc.layers.new(layer_name, dxfattribs={'color': color})
 
+            # Dibujar Punto y Texto (Usando p_id que es la variable correcta)
             msp.add_point((x, y, z), dxfattribs={'layer': layer_name})
-            msp.add_text(p_id, dxfattribs={'height': 0.25, 'layer': layer_name}).set_pos((x + 0.1, y + 0.1, z))
+            msp.add_text(p_id, 
+                         dxfattribs={'height': 0.25, 'layer': layer_name}
+                        ).set_pos((x + 0.1, y + 0.1, z))
 
-            if "LP" in desc_limpia:
+            # Guardar datos para el cuadro si es LP (Límite de Propiedad)
+            if 'LP' in desc_bruta:
                 puntos_cuadro.append({'p': p_id, 'x': x, 'y': y})
-        except:
+
+        except Exception as e:
             continue
-            
+
     return doc, puntos_cuadro
 
-st.title("🏗️ TopoConverter Pro")
+# --- 3. INTERFAZ ---
+st.title("🏗️ TopoConverter Pro: MicroSurvey Edition")
+st.info("Formato esperado: Punto, Norte (Y), Este (X), Elevación (Z), Descripción")
 
-archivo = st.file_uploader("Sube tu archivo", type=['txt', 'csv'])
+archivo = st.file_uploader("Sube el TXT/CSV de MicroSurvey", type=['txt', 'csv'])
 
 if archivo:
-    try:
-        df = pd.read_csv(archivo, sep=None, engine='python', header=None, skipinitialspace=True)
-        
-        if not df.empty:
-            st.write("✅ Archivo cargado correctamente.")
-            
-            if st.button("🚀 PROCESAR Y GENERAR"):
-                # 1. Procesar datos
-                doc, lista_lp = generar_archivo_topo(df)
-                
-                # 2. GENERAR LA TABLA (El cuadro de antes)
-                if len(lista_lp) > 1:
-                    st.success(f"📊 ¡Cuadro generado con {len(lista_lp)} puntos LP!")
-                    
-                    tabla_datos = []
-                    for i in range(len(lista_lp) - 1):
-                        p1 = lista_lp[i]
-                        p2 = lista_lp[i+1]
-                        dist = calcular_distancia(p1['x'], p1['y'], p2['x'], p2['y'])
-                        
-                        tabla_datos.append({
-                            "De": p1['p'], 
-                            "A": p2['p'], 
-                            "Distancia": f"{dist:.3f} m", 
-                            "Este (X)": f"{p1['x']:.3f}", 
-                            "Norte (Y)": f"{p1['y']:.3f}"
-                        })
-                    
-                    # AQUÍ ES DONDE SE PINTA EL CUADRO
-                    st.table(tabla_datos)
-                else:
-                    st.warning(f"⚠️ Se detectaron {len(lista_lp)} puntos LP. Revisa las etiquetas en tu archivo.")
+    # Leemos el archivo. Nota: Se asume que no tiene encabezado por el uso de 'names'
+    df = pd.read_csv(archivo, names=['Punto', 'Y', 'X', 'Z', 'Desc'])
+    st.subheader("Vista previa de datos")
+    st.dataframe(df.head())
 
-                # 3. Descarga y Registro
-                buffer = io.StringIO()
-                doc.write(buffer)
-                
-                st.download_button(
-                    label="⬇️ Descargar archivo DXF",
-                    data=buffer.getvalue(),
-                    file_name=f"TOPO_{archivo.name.split('.')[0]}.dxf",
-                    mime="application/dxf"
-                )
-                
-                # 4. Los globos que te gustan
-                st.balloons()
-                
-                try:
-                    supabase.table("registros_uso").insert({"puntos_procesados": len(df), "nombre_archivo": archivo.name}).execute()
-                except: pass
-                
-    except Exception as e:
-        st.error(f"Error crítico: {e}")
+    if st.button("🚀 Generar DXF + Cuadro de Construcción"):
+        doc, puntos_cuadro = generar_dxf_pro(df)
+        
+        # Lógica del Cuadro de Construcción
+        if len(puntos_cuadro) > 1:
+            st.subheader("📊 Cuadro de Construcción")
+            tabla_datos = []
+            for i in range(len(puntos_cuadro) - 1):
+                p1 = puntos_cuadro[i]
+                p2 = puntos_cuadro[i+1]
+                dist = calcular_rumbo(p1['x'], p1['y'], p2['x'], p2['y'])
+                tabla_datos.append({
+                    "De": p1['p'], 
+                    "A": p2['p'], 
+                    "Distancia (m)": round(dist, 3),
+                    "Este (X)": round(p1['x'], 3), 
+                    "Norte (Y)": round(p1['y'], 3)
+                })
+            st.table(tabla_datos)
+        
+        # Preparar descarga del DXF
+        out = io.StringIO()
+        doc.write(out)
+        dxf_string = out.getvalue()
+        
+        registrar_uso(len(df), archivo.name)
+        
+        st.download_button(
+            label="⬇️ Descargar DXF",
+            data=dxf_string,
+            file_name="levantamiento_topo.dxf",
+            mime="application/dxf"
+        )
