@@ -39,7 +39,7 @@ def generar_archivo_topo(df):
             desc_limpia = "".join(desc_bruta.split()) 
 
             # Imprimir en la web los primeros 10 para no saturar
-            if i < 100:
+            if i < 1000:
                 es_lp = "✅ SÍ" if "LP" in desc_limpia else "❌ NO"
                 st.write(f"Punto {p_id}: Contenido='{desc_limpia}' | ¿Detectado como LP?: {es_lp}")
 
