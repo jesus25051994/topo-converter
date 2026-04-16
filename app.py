@@ -24,9 +24,7 @@ def generar_archivo_topo(df):
     
     puntos_cuadro = []
     
-    # --- SECCIÓN DE DEBUG EN PANTALLA ---
-    st.write("🔍 **Análisis de etiquetas (Primeros 10 puntos):**")
-    
+    # Procesamiento de puntos y capas
     for i, row in df.iterrows():
         try:
             p_id = str(row[0]).strip()
@@ -34,14 +32,8 @@ def generar_archivo_topo(df):
             x = float(row[2])
             z = float(row[3])
             
-            # Limpieza total
             desc_bruta = str(row[4]).upper()
             desc_limpia = "".join(desc_bruta.split()) 
-
-            # Imprimir en la web los primeros 10 para no saturar
-            if i < 1000:
-                es_lp = "✅ SÍ" if "LP" in desc_limpia else "❌ NO"
-                st.write(f"Punto {p_id}: Contenido='{desc_limpia}' | ¿Detectado como LP?: {es_lp}")
 
             layer_name = f"TOPO_{desc_limpia}"
             if layer_name not in doc.layers:
@@ -51,6 +43,7 @@ def generar_archivo_topo(df):
             msp.add_point((x, y, z), dxfattribs={'layer': layer_name})
             msp.add_text(p_id, dxfattribs={'height': 0.25, 'layer': layer_name}).set_pos((x + 0.1, y + 0.1, z))
 
+            # Si el punto es LP, lo guardamos para el cuadro
             if "LP" in desc_limpia:
                 puntos_cuadro.append({'p': p_id, 'x': x, 'y': y})
         except:
@@ -58,28 +51,59 @@ def generar_archivo_topo(df):
             
     return doc, puntos_cuadro
 
-st.title("🏗️ TopoConverter Pro: Modo Debug")
+st.title("🏗️ TopoConverter Pro")
 
 archivo = st.file_uploader("Sube tu archivo", type=['txt', 'csv'])
 
 if archivo:
     try:
+        # Lectura automática con detección de separador
         df = pd.read_csv(archivo, sep=None, engine='python', header=None, skipinitialspace=True)
         
         if not df.empty:
-            if st.button("🚀 PROCESAR Y DEBUGUEAR"):
+            st.write("✅ Archivo cargado correctamente.")
+            
+            if st.button("🚀 GENERAR DXF + CUADRO"):
+                # PASO 1: Generar el archivo DXF y recolectar puntos LP
                 doc, lista_lp = generar_archivo_topo(df)
                 
+                # PASO 2: Generar y mostrar el Cuadro de Construcción
                 if len(lista_lp) > 1:
-                    st.success(f"📊 ¡Cuadro generado con {len(lista_lp)} puntos!")
-                    # ... (aquí iría la tabla que ya tienes)
+                    st.success(f"📊 ¡Cuadro generado con {len(lista_lp)} puntos LP!")
+                    
+                    tabla_datos = []
+                    # Recorremos los puntos para calcular distancias entre ellos
+                    for i in range(len(lista_lp) - 1):
+                        p1 = lista_lp[i]
+                        p2 = lista_lp[i+1]
+                        dist = calcular_distancia(p1['x'], p1['y'], p2['x'], p2['y'])
+                        
+                        tabla_datos.append({
+                            "De (Punto)": p1['p'], 
+                            "A (Punto)": p2['p'], 
+                            "Distancia (m)": f"{dist:.3f}", 
+                            "Este (X)": f"{p1['x']:.3f}", 
+                            "Norte (Y)": f"{p1['y']:.3f}"
+                        })
+                    
+                    # Pintamos la tabla visual en la web
+                    st.table(tabla_datos)
+                else:
+                    st.warning(f"⚠️ Se detectaron {len(lista_lp)} puntos LP. Se necesitan al menos 2 para generar la tabla.")
                 
-                st.balloons()
-                
-                # Descarga
+                # PASO 3: Configurar el botón de descarga del DXF
                 buffer = io.StringIO()
                 doc.write(buffer)
-                st.download_button("⬇️ Descargar DXF", buffer.getvalue(), "topo.dxf")
+                
+                st.download_button(
+                    label="⬇️ Descargar archivo DXF",
+                    data=buffer.getvalue(),
+                    file_name=f"TOPO_{archivo.name.split('.')[0]}.dxf",
+                    mime="application/dxf"
+                )
+                
+                # Festejo final
+                st.balloons()
                 
     except Exception as e:
-        st.error(f"Error crítico al leer el archivo: {e}")
+        st.error(f"Error crítico: {e}")
